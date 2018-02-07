@@ -188,13 +188,13 @@ end
 
 def generate_days(conference, days)
   (0...days).each do |i|
-    day = ($conferences.last.start_time.to_d.to_i + i.days).to_d.to_z
-    places = $rg.rand(5) * 10 + 1000
+    day = $conferences.last.start_time.to_d.to_i + i.days
+    places = $rg.rand(2) * 100 + 1000
 
     result = exec(
       'add_conference_day', [
         $conferences.last.id,
-        day,
+        day.to_d.to_z,
         places
       ], 'conference_day_id'
     )
@@ -204,24 +204,22 @@ def generate_days(conference, days)
       places: places
     }
 
-    (0...$rg.rand(5)).each do |_|
+    (0...($rg.rand(5) + 1)).each do |j|
       workshop = Workshop.new
       $conferences.last.workshops << workshop
-      generate_workshop(days)
+      generate_workshop(day, i, j)
     end
   end
 end
 
-def generate_workshop(days)
-  day_index = $rg.rand($conferences.last.days.size)
+def generate_workshop(day, day_index, j)
+  start = day + j.hours * 2 + 30.minutes
   workshop = $conferences.last.workshops.last
   workshop.title = Faker::Company.bs.capitalize
-  workshop.places = rand(4) * 5 + 100
+  workshop.places = rand(4) * 15 + 40
   workshop.price = rand(100) + 100
-  workshop.start_time = $conferences.last.days[day_index][:day]
-  workshop.end_time = (
-    workshop.start_time.to_d.to_i + rand(3) * 30.minutes
-  ).to_d.to_z
+  workshop.start_time = start.to_d.to_z
+  workshop.end_time = (start + 90.minutes).to_d.to_z
   workshop.conference_day_id = $conferences.last.days[day_index][:id]
   workshop.id = create_workshop(workshop, day_index)
 end
@@ -245,36 +243,45 @@ def fill_customer(customer)
   customer.is_company = is_company
 end
 
-def create_participants(customer, places_reserved)
+def create_participants(customer, count)
   participant_ids = []
-  # Assign people to order items
   if customer.is_company
-    (0...places_reserved).each { |_| participant_ids << add_company_participant(customer) }
+    (0...count).each { |_| participant_ids << add_company_participant(customer) }
   else
     participant_ids << add_solo_participant(customer)
   end
   participant_ids
 end
 
-def assign_participants(customer, workshop, participant_ids)
-  participant_ids.each do |p_id|
-    conference_day_participant_id = add_conference_day_participant(p_id, workshop)
-    exec(
-      'add_workshop_participant', [
-        workshop.id,
-        conference_day_participant_id,
-        p_id,
-        customer.order_id
-      ]
-    )
+def assign_participants(
+  customer,
+  participant_ids,
+  places_reserved,
+  conference_day_id,
+  day_reservation_id
+)
+  conference_day_participants = []
+  (0...places_reserved).each do |i|
+    conference_day_participants <<
+      {
+        conference_day_participant_id:
+          add_conference_day_participant(
+            participant_ids[i],
+            conference_day_id,
+            day_reservation_id
+          ),
+        participant_id: participant_ids[i]
+      }
   end
+  conference_day_participants
 end
 
-def add_conference_day_participant(participant_id, workshop)
+def add_conference_day_participant(participant_id, conference_day_id, day_reservation_id)
   exec(
     'add_conference_day_participant', [
       participant_id,
-      workshop.conference_day_id
+      conference_day_id,
+      day_reservation_id
     ], 'conference_day_participant_id'
   ).first['conference_day_participant_id']
 end
@@ -311,20 +318,28 @@ def add_company_participant(customer)
   exec(
     'add_participant', [
       customer.id,
-      customer.orders.last,
       Faker::Name.name
     ], 'participant_id'
   ).first['participant_id']
 end
 
 def add_solo_participant(customer)
-  exec(
-    'add_participant', [
-      customer.id,
-      customer.orders.last,
-      customer.name
-    ], 'participant_id'
-  ).first['participant_id']
+  if rand(4).zero?
+    exec(
+      'add_student_participant', [
+        customer.id,
+        customer.name,
+        Faker::Number.number(10)
+      ], 'participant_id'
+    ).first['participant_id']
+  else
+    exec(
+      'add_participant', [
+        customer.id,
+        customer.name
+      ], 'participant_id'
+    ).first['participant_id']
+  end
 end
 
 def add_order(customer)
@@ -336,19 +351,28 @@ def add_order(customer)
   ).first['order_id']
 end
 
-def add_order_item(customer, workshop, places_reserved)
+def add_day_reservation(customer, conference_day_id, places_reserved)
   exec(
-    'add_order_item', [
+    'add_day_reservation', [
       customer.order_id,
-      workshop.id,
-      workshop.conference_day_id,
+      conference_day_id,
       places_reserved
-    ], 'order_item_id'
-  ).first['order_item_id']
+    ], 'day_reservation_id'
+  ).first['day_reservation_id']
 end
 
-(0...10).each do |_|
-  start_time = Date.between(6.months.ahead, 3.years.ahead)
+def add_workshop_reservation(day_reservation_id, workshop, places_reserved)
+  exec(
+    'add_workshop_reservation', [
+      day_reservation_id,
+      workshop.id,
+      places_reserved
+    ], 'workshop_reservation_id'
+  ).first['workshop_reservation_id']
+end
+
+(0...5).each do |_|
+  start_time = (Date.between(6.months.ahead, 3.years.ahead).to_i + 9.hours).to_d
   days = $rg.rand(4) + 3
 
   conference = Conference.new
@@ -361,12 +385,53 @@ end
     generate_customer
     customer.order_id = add_order(customer)
 
-    $conferences.last.workshops.each do |w|
-      next if rand(2).zero?
-      places_reserved = customer.is_company ? rand(2) * 5 + 5 : 1
-      customer.orders << add_order_item(customer, w, places_reserved)
-      participant_ids = create_participants(customer, places_reserved)
-      assign_participants(customer, w, participant_ids)
+    participant_ids = create_participants(customer, 3 + rand(2))
+
+    # Assign each participant to each day
+    conference_day_participants = []
+    $conferences.last.days.each do |d|
+      day_reservation_id =
+        add_day_reservation(
+          customer,
+          d[:id],
+          participant_ids.size *
+            $conferences.last.workshops
+                        .select { |w| w.conference_day_id == d[:id] }
+                        .size
+        )
+
+      conference_day_participants <<
+        assign_participants(
+          customer,
+          participant_ids,
+          participant_ids.size,
+          d[:id],
+          day_reservation_id
+        )
+
+      $conferences.last.workshops.each do |workshop|
+        next unless workshop.conference_day_id == d[:id]
+
+        # Randomly get number of participants for this workshop.
+        count = conference_day_participants.last.size
+        workshop_reservation_id =
+          add_workshop_reservation(
+            day_reservation_id,
+            workshop,
+            count
+          )
+
+        conference_day_participants.last.first(count).each do |participant|
+          exec(
+            'add_workshop_participant', [
+              workshop.id,
+              participant[:conference_day_participant_id],
+              participant[:participant_id],
+              workshop_reservation_id
+            ]
+          )
+        end
+      end
     end
   end
 end

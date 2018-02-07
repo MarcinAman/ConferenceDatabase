@@ -1,11 +1,11 @@
-IF EXISTS(
-    SELECT *
-    FROM sys.databases
-    WHERE [name] = 'conference_database'
-)
-  DROP DATABASE conference_database;
-CREATE DATABASE conference_database;
-GO
+ IF EXISTS(
+     SELECT *
+     FROM sys.databases
+     WHERE [name] = 'conference_database'
+ )
+   DROP DATABASE conference_database;
+ CREATE DATABASE conference_database;
+ GO
 
 USE conference_database;
 
@@ -70,9 +70,10 @@ IF OBJECT_ID('dbo.conference_day_participants', 'U') IS NOT NULL
   END
 
 CREATE TABLE conference_day_participants (
-  id                INT IDENTITY NOT NULL,
-  participant_id    INT          NOT NULL,
-  conference_day_id INT          NOT NULL,
+  id                 INT IDENTITY NOT NULL,
+  participant_id     INT          NOT NULL,
+  conference_day_id  INT          NOT NULL,
+  day_reservation_id INT          NOT NULL,
   CONSTRAINT conference_day_participant_pk PRIMARY KEY (id)
 );
 
@@ -86,9 +87,9 @@ IF OBJECT_ID('dbo.conference_days', 'U') IS NOT NULL
       ALTER TABLE dbo.conference_day_participants
         DROP CONSTRAINT ConferenceDayParticipant_conference_days;
 
-    IF OBJECT_ID('order_items_conference_days', 'F') IS NOT NULL
-      ALTER TABLE dbo.order_items
-        DROP CONSTRAINT order_items_conference_days;
+    IF OBJECT_ID('day_reservations_conference_days', 'F') IS NOT NULL
+      ALTER TABLE dbo.day_reservations
+        DROP CONSTRAINT day_reservations_conference_days;
 
     IF OBJECT_ID('workshops_conference_days', 'F') IS NOT NULL
       ALTER TABLE dbo.workshops
@@ -101,8 +102,8 @@ CREATE TABLE conference_days (
   id            INT IDENTITY NOT NULL,
   conference_id INT          NOT NULL,
   day           DATETIME     NOT NULL,
-  seats         INT          NULL,
-  CONSTRAINT conference_days_pk PRIMARY KEY (id)
+  seats         INT          NOT NULL CHECK (seats > 0)
+    CONSTRAINT conference_days_pk PRIMARY KEY (id)
 );
 
 CREATE UNIQUE INDEX conference_days_id_uindex
@@ -186,7 +187,7 @@ CREATE TABLE customers (
   address    TEXT,
   zip_code   TEXT,
   country    TEXT,
-  is_company BIT          NULL,
+  is_company BIT          NULL DEFAULT 0,
   CONSTRAINT customers_pk PRIMARY KEY (id)
 );
 
@@ -194,25 +195,47 @@ CREATE UNIQUE INDEX customers_id_uindex
   ON customers (id)
 GO
 
-IF OBJECT_ID('dbo.order_items', 'U') IS NOT NULL
+IF OBJECT_ID('dbo.day_reservations', 'U') IS NOT NULL
   BEGIN
-    IF OBJECT_ID('participants_order_items', 'F') IS NOT NULL
+    IF OBJECT_ID('participants_day_reservations', 'F') IS NOT NULL
       ALTER TABLE dbo.participants
-        DROP CONSTRAINT participants_order_items;
-    DROP TABLE dbo.order_items;
+        DROP CONSTRAINT participants_day_reservations;
+    DROP TABLE dbo.day_reservations;
   END
+GO
 
-CREATE TABLE order_items (
-  id                 INT IDENTITY NOT NULL,
-  order_id           INT          NOT NULL,
-  workshop_id        INT          NOT NULL,
-  places_reserved    INT          NOT NULL,
-  conference_days_id INT          NOT NULL,
-  CONSTRAINT order_items_pk PRIMARY KEY (id)
+CREATE TABLE day_reservations (
+  id                INT IDENTITY NOT NULL,
+  order_id          INT          NOT NULL,
+  conference_day_id INT          NOT NULL,
+  places_reserved   INT          NOT NULL CHECK (places_reserved > 0),
+  CONSTRAINT day_reservations_pk PRIMARY KEY (id)
 );
 
-CREATE UNIQUE INDEX order_items_id_uindex
-  ON order_items (id)
+CREATE UNIQUE INDEX day_reservations_id_uindex
+  ON day_reservations (id)
+GO
+
+IF OBJECT_ID('dbo.workshop_reservations', 'U') IS NOT NULL
+    BEGIN
+      IF OBJECT_ID('workshop_participants_workshop_reservations', 'F') IS NOT NULL
+        ALTER TABLE dbo.workshop_participants
+        DROP CONSTRAINT workshop_participants_workshop_reservations;
+
+      DROP TABLE dbo.workshop_reservations;
+    END
+GO
+
+CREATE TABLE workshop_reservations (
+  id                 INT IDENTITY NOT NULL,
+  workshop_id        INT          NOT NULL,
+  day_reservation_id INT          NOT NULL,
+  places_reserved    INT          NOT NULL CHECK (places_reserved > 0),
+  CONSTRAINT workshop_reservations_pk PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX workshop_reservations_id_uindex
+  ON workshop_reservations (id)
 GO
 
 IF OBJECT_ID('dbo.orders', 'U') IS NOT NULL
@@ -234,23 +257,30 @@ IF OBJECT_ID('dbo.participants', 'U') IS NOT NULL
   DROP TABLE dbo.participants;
 
 CREATE TABLE participants (
-  id            INT IDENTITY NOT NULL,
-  customer_id   INT          NOT NULL,
-  order_item_id INT          NOT NULL,
-  name          VARCHAR(256) NOT NULL,
-  card_no       INT          NULL,
+  id          INT IDENTITY NOT NULL,
+  customer_id INT          NOT NULL,
+  name        VARCHAR(256) NOT NULL,
+  card_no     VARCHAR(10)  NULL,
   CONSTRAINT participants_pk PRIMARY KEY (id)
 );
 
 SELECT *
 FROM sys.objects
 IF OBJECT_ID('dbo.workshop_participants', 'U') IS NOT NULL
-  DROP TABLE dbo.workshop_participants;
+    begin
+      IF OBJECT_ID('workshop_participants_workshop_reservations', 'F') IS NOT NULL
+        ALTER TABLE dbo.workshop_participants
+        DROP CONSTRAINT workshop_participants_workshop_reservations;
+
+      DROP TABLE dbo.workshop_participants;
+    END
+GO
 
 CREATE TABLE workshop_participants (
   id                            INT IDENTITY NOT NULL,
   workshop_id                   INT          NOT NULL,
   conference_day_participant_id INT          NOT NULL,
+  workshop_reservation_id       INT          NOT NULL,
   CONSTRAINT workshop_participants_pk PRIMARY KEY (id)
 );
 
@@ -276,7 +306,22 @@ CREATE UNIQUE INDEX workshops_id_uindex
   ON workshops (id)
 GO
 
+-- INDEXES
+
+IF EXISTS(
+    SELECT *
+    FROM sys.indexes
+    WHERE name = 'participant_card_no'
+          AND object_id = OBJECT_ID('[dbo].[participants]')
+)
+  DROP INDEX participant_card_no
+    ON participants
+
+CREATE INDEX participant_card_no
+  ON participants (card_no DESC)
+
 -- FOREIGN KEYS
+
 IF OBJECT_ID('conference_day_participants_conference_days', 'F') IS NOT NULL
   ALTER TABLE dbo.conference_day_participants
     DROP CONSTRAINT conference_day_participants_conference_days;
@@ -294,6 +339,25 @@ ALTER TABLE conference_day_participants
   ADD CONSTRAINT conference_day_participants_participants
 FOREIGN KEY (participant_id)
 REFERENCES participants (id);
+
+IF OBJECT_ID('conference_day_participants_day_reservations', 'F') IS NOT NULL
+  ALTER TABLE dbo.conference_day_participants
+    DROP CONSTRAINT conference_day_participants_day_reservations;
+
+ALTER TABLE conference_day_participants
+  ADD CONSTRAINT conference_day_participants_day_reservations
+FOREIGN KEY (day_reservation_id)
+REFERENCES day_reservations (id);
+
+IF OBJECT_ID('conference_day_participants_day_reservations', 'F') IS NOT NULL
+  ALTER TABLE dbo.conference_day_participants
+    DROP CONSTRAINT conference_day_participants_day_reservations;
+
+ALTER TABLE conference_day_participants
+  ADD CONSTRAINT conference_day_participants_day_reservations
+FOREIGN KEY (day_reservation_id)
+REFERENCES day_reservations (id);
+
 
 IF OBJECT_ID('conference_has_pricing_conference_pricing', 'F') IS NOT NULL
   ALTER TABLE dbo.conference_has_pricing
@@ -340,21 +404,21 @@ ALTER TABLE orders
 FOREIGN KEY (customer_id)
 REFERENCES customers (id);
 
-IF OBJECT_ID('order_items_conference_days', 'F') IS NOT NULL
-  ALTER TABLE dbo.order_items
-    DROP CONSTRAINT order_items_conference_days;
+IF OBJECT_ID('day_reservations_conference_days', 'F') IS NOT NULL
+  ALTER TABLE dbo.day_reservations
+    DROP CONSTRAINT day_reservations_conference_days;
 
-ALTER TABLE order_items
-  ADD CONSTRAINT order_items_conference_days
-FOREIGN KEY (conference_days_id)
+ALTER TABLE day_reservations
+  ADD CONSTRAINT day_reservations_conference_days
+FOREIGN KEY (conference_day_id)
 REFERENCES conference_days (id);
 
-IF OBJECT_ID('orders_order_items', 'F') IS NOT NULL
-  ALTER TABLE dbo.order_items
-    DROP CONSTRAINT orders_order_items;
+IF OBJECT_ID('orders_day_reservations', 'F') IS NOT NULL
+  ALTER TABLE dbo.day_reservations
+    DROP CONSTRAINT orders_day_reservations;
 
-ALTER TABLE order_items
-  ADD CONSTRAINT orders_order_items
+ALTER TABLE day_reservations
+  ADD CONSTRAINT orders_day_reservations
 FOREIGN KEY (order_id)
 REFERENCES orders (id);
 
@@ -367,15 +431,6 @@ ALTER TABLE participants
 FOREIGN KEY (customer_id)
 REFERENCES customers (id);
 
-IF OBJECT_ID('participants_order_items', 'F') IS NOT NULL
-  ALTER TABLE dbo.participants
-    DROP CONSTRAINT participants_order_items;
-
-ALTER TABLE participants
-  ADD CONSTRAINT participants_order_items
-FOREIGN KEY (order_item_id)
-REFERENCES order_items (id);
-
 IF OBJECT_ID('workshop_participants_conference_day_participants', 'F') IS NOT NULL
   ALTER TABLE dbo.workshop_participants
     DROP CONSTRAINT workshop_participants_conference_day_participants;
@@ -384,6 +439,15 @@ ALTER TABLE workshop_participants
   ADD CONSTRAINT workshop_participants_conference_day_participants
 FOREIGN KEY (conference_day_participant_id)
 REFERENCES conference_day_participants (id);
+
+IF OBJECT_ID('workshop_participants_workshop_reservations', 'F') IS NOT NULL
+  ALTER TABLE dbo.workshop_participants
+    DROP CONSTRAINT workshop_participants_workshop_reservations;
+
+ALTER TABLE workshop_participants
+  ADD CONSTRAINT workshop_participants_workshop_reservations
+FOREIGN KEY (workshop_reservation_id)
+REFERENCES workshop_reservations (id);
 
 IF OBJECT_ID('workshops_conference_days', 'F') IS NOT NULL
   ALTER TABLE dbo.workshops
@@ -401,15 +465,6 @@ ALTER TABLE workshops
   ADD CONSTRAINT workshops_conference_days
 FOREIGN KEY (conference_day_id)
 REFERENCES conference_days (id);
-
-IF OBJECT_ID('workshops_order_items', 'F') IS NOT NULL
-  ALTER TABLE dbo.order_items
-    DROP CONSTRAINT workshops_order_items;
-
-ALTER TABLE order_items
-  ADD CONSTRAINT workshops_order_items
-FOREIGN KEY (workshop_id)
-REFERENCES workshops (id);
 
 IF OBJECT_ID('workshops_workshop_participants', 'F') IS NOT NULL
   ALTER TABLE dbo.workshop_participants
@@ -680,16 +735,15 @@ GO
 
 IF EXISTS(SELECT *
           FROM sys.objects
-          WHERE object_id = OBJECT_ID(N'add_order_item') AND TYPE IN (N'P', N'PC'))
-  DROP PROCEDURE [dbo].[add_order_item]
+          WHERE object_id = OBJECT_ID(N'add_day_reservation') AND TYPE IN (N'P', N'PC'))
+  DROP PROCEDURE [dbo].[add_day_reservation]
 GO
 
-CREATE PROCEDURE [dbo].[add_order_item]
-    @order_id          INT,
-    @workshop_id       INT,
-    @conference_day_id INT,
-    @places_reserved   INT,
-    @order_item_id     INT = NULL OUT
+CREATE PROCEDURE [dbo].[add_day_reservation]
+    @order_id           INT,
+    @conference_day_id  INT,
+    @places_reserved    INT,
+    @day_reservation_id INT = NULL OUT
 AS BEGIN
   BEGIN TRY
   BEGIN TRANSACTION
@@ -701,25 +755,63 @@ AS BEGIN
                 FROM conference_days
                 WHERE id = @conference_day_id)
     THROW 50000, '@conference_day_id not in database', 1
-  IF NOT EXISTS(SELECT *
-                FROM workshops
-                WHERE id = @workshop_id)
-    THROW 50000, '@workshop not in database', 1
   IF @places_reserved <= 0
     THROW 50000, '@places_reserved below or equal 0', 1
 
-  INSERT INTO order_items (
+  INSERT INTO day_reservations (
     order_id,
-    workshop_id,
-    conference_days_id,
+    conference_day_id,
     places_reserved
   ) VALUES (
     @order_id,
-    @workshop_id,
     @conference_day_id,
     @places_reserved
   )
-  SET @order_item_id = SCOPE_IDENTITY()
+  SET @day_reservation_id = SCOPE_IDENTITY()
+  COMMIT TRANSACTION
+  END TRY
+  BEGIN CATCH
+  ROLLBACK TRANSACTION;
+  THROW
+  END CATCH
+END
+GO
+
+IF EXISTS(SELECT *
+          FROM sys.objects
+          WHERE object_id = OBJECT_ID(N'add_workshop_reservation') AND TYPE IN (N'P', N'PC'))
+  DROP PROCEDURE [dbo].[add_workshop_reservation]
+GO
+
+CREATE PROCEDURE [dbo].[add_workshop_reservation]
+    @day_reservation_id      INT,
+    @workshop_id             INT,
+    @places_reserved         INT,
+    @workshop_reservation_id INT = NULL OUT
+AS BEGIN
+  BEGIN TRY
+  BEGIN TRANSACTION
+  IF NOT EXISTS(SELECT *
+                FROM workshops
+                WHERE id = @workshop_id)
+    THROW 50000, 'Workshop not in database', 1
+  IF NOT EXISTS(SELECT *
+                FROM day_reservations
+                WHERE id = @day_reservation_id)
+    THROW 50000, 'Day reservation not in database', 1
+  IF @places_reserved <= 0
+    THROW 50000, '@places_reserved below or equal 0', 1
+
+  INSERT INTO workshop_reservations (
+    day_reservation_id,
+    workshop_id,
+    places_reserved
+  ) VALUES (
+    @day_reservation_id,
+    @workshop_id,
+    @places_reserved
+  )
+  SET @workshop_reservation_id = SCOPE_IDENTITY()
   COMMIT TRANSACTION
   END TRY
   BEGIN CATCH
@@ -737,7 +829,6 @@ GO
 
 CREATE PROCEDURE [dbo].[add_participant]
     @customer_id    INT,
-    @order_item_id  INT,
     @name           VARCHAR(256),
     @participant_id INT = NULL OUT
 AS BEGIN
@@ -747,30 +838,13 @@ AS BEGIN
                 FROM customers
                 WHERE id = @customer_id)
     THROW 50000, '@customer_id not in database', 1
-  IF NOT EXISTS(SELECT *
-                FROM order_items
-                WHERE id = @order_item_id)
-    THROW 50000, '@order_item not in database', 1
   IF LTRIM(@name) = ''
     THROW 50000, '@name is empty', 1
-  IF (
-       SELECT count(id)
-       FROM participants
-       WHERE order_item_id = @order_item_id
-     ) >= (
-       SELECT places_reserved
-       FROM order_items
-       WHERE id = @order_item_id
-     )
-    THROW 50000, 'No more places left in this order_item', 1
-
   INSERT INTO participants (
     customer_id,
-    order_item_id,
     [name]
   ) VALUES (
     @customer_id,
-    @order_item_id,
     @name
   )
   SET @participant_id = SCOPE_IDENTITY()
@@ -790,10 +864,10 @@ IF EXISTS(SELECT *
 GO
 
 CREATE PROCEDURE [dbo].[add_student_participant]
-    @customer_id   INT,
-    @order_item_id INT,
-    @name          VARCHAR(256),
-    @card_no       INT
+    @customer_id    INT,
+    @name           VARCHAR(256),
+    @card_no        VARCHAR(10),
+    @participant_id INT = NULL OUT
 AS BEGIN
   BEGIN TRY
   BEGIN TRANSACTION
@@ -801,34 +875,19 @@ AS BEGIN
                 FROM customers
                 WHERE id = @customer_id)
     THROW 50000, '@customer_id not in database', 1
-  IF NOT EXISTS(SELECT *
-                FROM order_items
-                WHERE id = @order_item_id)
-    THROW 50000, '@order_item not in database', 1
   IF LTRIM(@name) = ''
     THROW 50000, '@name is empty', 1
-  IF (
-       SELECT count(id)
-       FROM participants
-       WHERE order_item_id = @order_item_id
-     ) >= (
-       SELECT places_reserved
-       FROM order_items
-       WHERE id = @order_item_id
-     )
-    THROW 50000, 'No more places left in this order_item', 1
 
   INSERT INTO participants (
     customer_id,
-    order_item_id,
     [name],
     card_no
   ) VALUES (
     @customer_id,
-    @order_item_id,
     @name,
     @card_no
   )
+  SET @participant_id = SCOPE_IDENTITY()
   COMMIT TRANSACTION
   END TRY
   BEGIN CATCH
@@ -848,7 +907,7 @@ CREATE PROCEDURE [dbo].[add_workshop_participant]
     @workshop_id                   INT,
     @conference_day_participant_id INT,
     @participant_id                INT,
-    @order_item_id                 INT
+    @workshop_reservation_id       INT
 AS BEGIN
   BEGIN TRY
   BEGIN TRANSACTION
@@ -865,22 +924,23 @@ AS BEGIN
   IF (
        SELECT count(wp.id)
        FROM workshop_participants AS wp
-         INNER JOIN conference_day_participants AS cdp ON wp.conference_day_participant_id = cdp.id
-         INNER JOIN participants AS p ON p.id = cdp.participant_id
-       WHERE p.id = @participant_id
+       WHERE wp.workshop_id = @workshop_id
+             AND wp.workshop_reservation_id = @workshop_reservation_id
      ) >= (
        SELECT places_reserved
-       FROM order_items
-       WHERE id = @order_item_id
+       FROM workshop_reservations
+       WHERE id = @workshop_reservation_id
      )
     THROW 50000, 'No more places left available in this order', 1
 
   INSERT INTO workshop_participants (
     workshop_id,
-    conference_day_participant_id
+    conference_day_participant_id,
+    workshop_reservation_id
   ) VALUES (
     @workshop_id,
-    @conference_day_participant_id
+    @conference_day_participant_id,
+    @workshop_reservation_id
   )
   COMMIT TRANSACTION
   END TRY
@@ -933,7 +993,8 @@ GO
 CREATE PROCEDURE [dbo].[add_conference_day_participant]
     @participant_id                INT,
     @conference_day_id             INT,
-		@conference_day_participant_id INT = NULL OUT
+    @day_reservation_id            INT,
+    @conference_day_participant_id INT = NULL OUT
 AS BEGIN
   BEGIN TRY
   BEGIN TRANSACTION
@@ -949,15 +1010,27 @@ AS BEGIN
             FROM conference_day_participants
             WHERE participant_id = @participant_id AND conference_day_id = @conference_day_id)
     THROW 50000, 'Participant already enrolled for this conference day', 1
+  IF (
+       SELECT count(id)
+       FROM conference_day_participants
+       WHERE day_reservation_id = @day_reservation_id
+     ) >= (
+       SELECT places_reserved
+       FROM day_reservations
+       WHERE id = @day_reservation_id
+     )
+    THROW 50000, 'No more places left in this day reservation', 1
 
   INSERT INTO conference_day_participants (
     conference_day_id,
+    day_reservation_id,
     participant_id
   ) VALUES (
     @conference_day_id,
+    @day_reservation_id,
     @participant_id
   )
-	SET @conference_day_participant_id = SCOPE_IDENTITY()
+  SET @conference_day_participant_id = SCOPE_IDENTITY()
   COMMIT TRANSACTION
   END TRY
   BEGIN CATCH
@@ -1247,7 +1320,7 @@ AS BEGIN
   IF day(@start_time) != day(@end_time)
     THROW 50000, 'Begining and end days have to be the same', 1
   IF EXISTS(SELECT *
-            FROM order_items
+            FROM day_reservations
             WHERE id = @workshop_id)
     THROW 50000, 'There is at least 1 person enrolled for this workshop. Can change the time', 1
 
@@ -1276,39 +1349,20 @@ CREATE PROCEDURE [dbo].[cancel_order]
 AS BEGIN
   BEGIN TRY
   BEGIN TRANSACTION
-  IF NOT EXISTS(SELECT *
+  IF NOT exists(SELECT *
                 FROM orders
                 WHERE id = @order_id)
-    THROW 50000, 'Order not in database', 1
+    THROW 50000, 'Order with this id is not in database', 1
+
+  DELETE FROM conference_day_participants
+  WHERE day_reservation_id IN (SELECT dr.id
+                               FROM day_reservations AS dr INNER JOIN orders AS o ON o.id = dr.order_id
+                               WHERE o.id = @order_id)
+
   UPDATE orders
   SET is_cancelled = 1
   WHERE id = @order_id
 
-  DECLARE @orderItemID INT
-  SET @orderItemID = (SELECT id
-                      FROM order_items
-                      WHERE order_id = @order_id)
-
-  DELETE conference_day_participants
-  WHERE id IN (
-    SELECT cdp.id
-    FROM conference_day_participants AS cdp
-      INNER JOIN workshop_participants AS wp ON wp.conference_day_participant_id = cdp.id
-      INNER JOIN order_items AS oi ON oi.id = @orderItemID AND oi.workshop_id = wp.workshop_id
-  )
-
-  DELETE workshop_participants
-  WHERE id IN (SELECT wp.id
-               FROM workshop_participants AS wp
-                 INNER JOIN conference_day_participants AS cdp ON wp.conference_day_participant_id = cdp.id
-                 INNER JOIN participants AS p ON p.id = cdp.participant_id
-               WHERE p.order_item_id IN
-                     (SELECT oi.id
-                      FROM order_items AS oi
-                        INNER JOIN orders AS o ON o.id = oi.order_id
-                      WHERE o.id = @order_id
-                     )
-  )
   COMMIT TRANSACTION
   END TRY
   BEGIN CATCH
@@ -1329,14 +1383,25 @@ CREATE PROCEDURE [dbo].[cancel_unpaid_orders]
 AS BEGIN
   BEGIN TRY
   BEGIN TRANSACTION
+
+  DELETE FROM conferece_days_participants
+  WHERE day_reservation_id IN (SELECT id
+                               FROM day_reservations AS dr INNER JOIN orders AS o ON dr.order_id = o.id
+                               WHERE o.id IN (SELECT orders.id
+                                              FROM orders
+                                                LEFT OUTER JOIN payments ON payments.order_id = orders.id
+                                              WHERE datediff(DAY, order_date, GETDATE()) >= @days AND
+                                                    payments.order_id IS NULL))
+
+  --deleting conference_day_participant will automatically delete workshop participants
+
   UPDATE orders
   SET is_cancelled = 1
-  WHERE id IN (
-    SELECT orders.id
-    FROM orders
-      LEFT OUTER JOIN payments ON payments.order_id = orders.id
-    WHERE datediff(DAY, order_date, GETDATE()) >= @days AND payments.order_id IS NULL
-  )
+  WHERE id IN (SELECT orders.id
+               FROM orders
+                 LEFT OUTER JOIN payments ON payments.order_id = orders.id
+               WHERE datediff(DAY, order_date, GETDATE()) >= @days AND payments.order_id IS NULL)
+
   COMMIT TRANSACTION
   END TRY
   BEGIN CATCH
@@ -1374,11 +1439,10 @@ AS BEGIN
   SET @end_time2 = (SELECT end_time
                     FROM workshops
                     WHERE id = @workshop_id2)
-  IF ((@start_time1 < @start_time2 AND @end_time2 > @end_time1)
-      OR (@start_time2 > @start_time1 AND @end_time2 < @end_time1)
-      OR (@start_time2 < @start_time1 AND @end_time2 < @end_time1))
-    RETURN 1
-  RETURN 0
+  IF ((@start_time1 < @start_time2 AND @end_time1 <= @end_time2)
+      OR (@start_time1 >= @start_time2))
+    RETURN 0
+  RETURN 1
 END
 GO
 
@@ -1395,10 +1459,11 @@ AS BEGIN
            SELECT seats
            FROM conference_days
            WHERE id = @conference_day_id
-         ) - (SELECT sum(oi.places_reserved)
-              FROM order_items AS oi
-                INNER JOIN orders AS o ON o.id = oi.order_id AND o.is_cancelled = 0
-                INNER JOIN workshops AS w ON w.id = oi.workshop_id
+         ) - (SELECT sum(dr.places_reserved)
+              FROM day_reservations AS dr
+                INNER JOIN orders AS o ON o.id = dr.order_id AND o.is_cancelled = 0
+                INNER JOIN workshop_reservations AS wr ON wr.day_reservation_id = dr.id
+                INNER JOIN workshops AS w ON w.id = wr.workshop_id
               WHERE w.conference_day_id = @conference_day_id
          )
 END
@@ -1418,10 +1483,11 @@ AS BEGIN
            FROM workshops
            WHERE id = @workshop_id
          ) - (
-           SELECT count(*)
-           FROM order_items AS oi
-             INNER JOIN orders AS o ON oi.order_id = o.id AND o.is_cancelled = 0
-           WHERE workshop_id = @workshop_id
+           SELECT sum(wr.places_reserved)
+           FROM workshop_reservations AS wr
+             INNER JOIN day_reservations AS dr ON dr.id = wr.day_reservation_id
+             INNER JOIN orders AS o ON o.id = dr.order_id
+           WHERE o.is_cancelled = 0 AND wr.workshop_id = @workshop_id
          );
 END
 GO
@@ -1475,7 +1541,7 @@ GO
 -- If there is at least one participant specified, we assume that client is
 -- happy with the number of participants they filled and is not interested in
 -- remaining places.
-CREATE FUNCTION [dbo].[get_customers_with_not_filled_participants](@amountOfDays INT)
+CREATE FUNCTION [dbo].[get_customers_with_not_filled_participants](@amount_of_days INT)
   RETURNS TABLE
   AS
   RETURN(SELECT
@@ -1484,38 +1550,88 @@ CREATE FUNCTION [dbo].[get_customers_with_not_filled_participants](@amountOfDays
            od.places_reserved AS 'Seats'
          FROM customers AS cust
            INNER JOIN orders AS o ON o.customer_id = cust.id
-           INNER JOIN order_items AS od ON od.order_id = o.id
+           INNER JOIN day_reservations AS od ON od.order_id = o.id
          WHERE od.id NOT IN
-               (SELECT p.order_item_id
-                FROM participants AS p
+               (SELECT cdp.day_reservation_id
+                FROM conference_day_participants AS cdp
+                  INNER JOIN participants AS p ON cdp.participant_id = p.id
                   INNER JOIN customers AS cus ON cus.id = p.customer_id AND cus.id = cust.id
-                  INNER JOIN conference_day_participants AS cdp ON cdp.participant_id = p.id
                   INNER JOIN conference_days AS cd ON cd.id = cdp.conference_day_id
                   INNER JOIN conferences AS c ON c.id = cd.conference_id
                )
-               AND datediff(DAY, o.order_date, GETDATE()) < @amountOfDays
+               AND datediff(DAY, o.order_date, GETDATE()) < @amount_of_days
   );
+GO
+
+IF EXISTS (SELECT * FROM sys.objects where [name] = 'get_payment_amount')
+    DROP FUNCTION [dbo].[get_payment_amount]
+GO
+
+CREATE FUNCTION [dbo].[get_payment_amount](@order_id INT)
+  RETURNS DECIMAL(8, 2)
+AS BEGIN
+  DECLARE @sum INT
+  SET @sum = (SELECT sum(dr.places_reserved)
+              FROM day_reservations AS dr
+                INNER JOIN orders AS o ON o.id = dr.order_id
+              WHERE o.id = @order_id)
+
+  DECLARE @students INT
+  SET @students = (SELECT count(*)
+                   FROM participants AS p
+                     INNER JOIN conference_day_participants AS cdp ON cdp.participant_id = p.id
+                     INNER JOIN day_reservations AS dr ON dr.id = cdp.day_reservation_id
+                     INNER JOIN orders AS o ON o.id = dr.order_id
+                   WHERE o.id = @order_id
+  )
+
+  DECLARE @discount NUMERIC(2, 2)
+  SET @discount = (
+    SELECT discount
+    FROM conferences AS c
+      INNER JOIN conference_days AS cd ON cd.conference_id = c.id
+      INNER JOIN day_reservations AS dr ON dr.conference_day_id = cd.id
+      INNER JOIN orders AS o ON o.id = dr.order_id
+    WHERE o.id = @order_id
+  )
+
+  DECLARE @price DECIMAL(8, 2)
+  SET @price = (
+    SELECT TOP 1 cp.price
+    FROM conference_pricings cp
+      INNER JOIN conference_has_pricing chp ON cp.id = chp.conference_pricing_id
+      INNER JOIN conferences c ON chp.conference_id = c.id
+      INNER JOIN conference_days cd ON c.id = cd.conference_id
+      INNER JOIN day_reservations reservation ON cd.id = reservation.conference_day_id
+      INNER JOIN orders o ON reservation.order_id = o.id
+    WHERE cp.since_date > o.order_date AND o.id = 1
+    ORDER BY since_date ASC
+  )
+  RETURN (@sum - @students) * @price + @students * (1 - @discount) * @price
+END
 GO
 
 --TRIGGERS
 
 IF EXISTS(SELECT *
           FROM sys.objects
-          WHERE [name] = 'too_few_places_on_workshop_to_order' AND TYPE = 'TR')
-  DROP TRIGGER [dbo].[too_few_places_on_workshop_to_order]
+          WHERE [name] = 't_too_few_places_on_workshop_to_order' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_too_few_places_on_workshop_to_order]
 GO
 
-CREATE TRIGGER [dbo].[too_few_places_on_workshop_to_order]
-  ON [dbo].[order_items]
+CREATE TRIGGER [dbo].[t_too_few_places_on_workshop_to_order]
+  ON [dbo].[day_reservations]
   AFTER INSERT, UPDATE
 AS
   BEGIN
-    IF EXISTS(SELECT oi.workshop_id
-              FROM order_items AS oi INNER JOIN workshops AS w ON w.id = oi.workshop_id
-              WHERE (SELECT sum(o.places_reserved)
-                     FROM order_items AS o
-                     GROUP BY o.workshop_id
-                     HAVING o.workshop_id = w.id) > w.places)
+
+    IF EXISTS(SELECT wr.workshop_id
+              FROM workshop_reservations AS wr
+                INNER JOIN workshops AS w ON w.id = wr.workshop_id
+              WHERE (SELECT sum(dr.places_reserved)
+                     FROM workshop_reservations AS dr
+                     GROUP BY dr.workshop_id
+                     HAVING dr.workshop_id = w.id) > w.places)
       THROW 50000, 'Too few places on workshop', 1
   END
 GO
@@ -1537,7 +1653,7 @@ GO
 --
 -- 	DECLARE @currentlyTaken INT
 -- 	SET @currentlyTaken = (
--- 		SELECT sum(oi.places_reserved) FROM order_items AS oi
+-- 		SELECT sum(oi.places_reserved) FROM day_reservations AS oi
 -- 		INNER JOIN orders AS o ON o.id = oi.order_id AND o.is_cancelled = 0
 -- 		WHERE oi.workshop_id = @workshop_id
 -- 	)
@@ -1548,54 +1664,58 @@ GO
 
 IF EXISTS(SELECT *
           FROM sys.objects
-          WHERE [name] = 'too_few_places_on_conference_day_on_order' AND TYPE = 'TR')
-  DROP TRIGGER [dbo].[too_few_places_on_conference_day_on_order]
+          WHERE [name] = 't_too_few_places_on_conference_day_on_order' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_too_few_places_on_conference_day_on_order]
 GO
 
-CREATE TRIGGER [dbo].[too_few_places_on_conference_day_on_order]
-  ON [dbo].[order_items]
+CREATE TRIGGER [dbo].[t_too_few_places_on_conference_day_on_order]
+  ON [dbo].[day_reservations]
   AFTER INSERT, UPDATE
 AS
   BEGIN
     IF EXISTS(SELECT *
               FROM conference_days AS cd
-                INNER JOIN inserted AS i ON i.conference_days_id = cd.id
+                INNER JOIN inserted AS i ON i.conference_day_id = cd.id
               WHERE dbo.get_free_day_places(cd.id) < 0)
       THROW 50000, 'Too few places on conference day', 1
   END
 GO
 
+IF EXISTS(SELECT *
+          FROM sys.objects
+          WHERE [name] = 't_already_enrolled_on_other_workshop' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_already_enrolled_on_other_workshop]
+GO
 
--- W sumie to nie wiem czy to chcemy. Bo kto bogatemu zabroni zapisac sie na wszystkie warsztaty?
--- Jesli tak to w sumie trzeba przerobic bo jest tak, jakby inserted i updated bylo pojedynczymi rekordami
+CREATE TRIGGER [dbo].[t_already_enrolled_on_other_workshop]
+  ON [dbo].[workshop_participants]
+  AFTER INSERT, UPDATE
+AS
+  BEGIN
+    DECLARE @workshop_id INT
+    DECLARE @conference_day_participant_id INT
+    SET @workshop_id = (SELECT workshop_id
+                        FROM inserted)
+    SET @conference_day_participant_id = (SELECT conference_day_participant_id
+                                          FROM inserted)
 
--- IF EXISTS (SELECT * FROM sys.objects WHERE [name] = 'already_enrolled_on_other_workshop' AND TYPE = 'TR')
--- DROP TRIGGER [dbo].[already_enrolled_on_other_workshop]
--- GO
---
--- CREATE TRIGGER [dbo].[already_enrolled_on_other_workshop]
--- ON [dbo].[workshop_participants]
--- AFTER INSERT, UPDATE
--- AS BEGIN
--- 		DECLARE @workshop_id INT
--- 		DECLARE @conference_day_participant_id INT
--- 		SET @workshop_id = (SELECT workshop_id FROM inserted)
--- 		SET @conference_day_participant_id = (SELECT conference_day_participant_id FROM inserted)
---
--- 		IF (SELECT count(*) FROM workshops AS w
--- 			WHERE dbo.does_workshops_overlap(@workshop_id,w.id) = 1 AND @workshop_id <> w.id
--- 		) > 1
--- 			THROW 50000, 'Participant already enrolled for another workshop at the same time', 1
--- END
--- GO
+    IF (SELECT count(*)
+        FROM workshops AS w
+          INNER JOIN workshop_participants wp ON w.id = wp.workshop_id
+        WHERE dbo.does_workshops_overlap(@workshop_id, w.id) = 1 AND @workshop_id <> w.id
+              AND wp.conference_day_participant_id = @conference_day_participant_id
+       ) > 1
+      THROW 50000, 'Participant already enrolled for another workshop at the same time', 1
+  END
+GO
 
 IF EXISTS(SELECT *
           FROM sys.objects
-          WHERE [name] = 'workshop_conference_day_connection' AND TYPE = 'TR')
-  DROP TRIGGER [dbo].[workshop_conference_day_connection]
+          WHERE [name] = 't_workshop_conference_day_connection' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_workshop_conference_day_connection]
 GO
 
-CREATE TRIGGER [dbo].[workshop_conference_day_connection]
+CREATE TRIGGER [dbo].[t_workshop_conference_day_connection]
   ON [dbo].[workshops]
   AFTER INSERT, UPDATE
 AS
@@ -1628,11 +1748,11 @@ GO
 
 IF EXISTS(SELECT *
           FROM sys.objects
-          WHERE [name] = 'conference_conference_day_connection' AND TYPE = 'TR')
-  DROP TRIGGER [dbo].[conference_conference_day_connection]
+          WHERE [name] = 't_conference_conference_day_connection' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_conference_conference_day_connection]
 GO
 
-CREATE TRIGGER [dbo].[conference_conference_day_connection]
+CREATE TRIGGER [dbo].[t_conference_conference_day_connection]
   ON [dbo].[conference_days]
   AFTER INSERT, UPDATE, DELETE
 AS
@@ -1648,19 +1768,20 @@ AS
       THROW 50000, 'Conference day not in conference time', 1
 
     IF EXISTS(SELECT *
-              FROM inserted AS i INNER JOIN conference_days AS cd ON cd.[day] = i.[day]
-              GROUP BY i.conference_id
-              HAVING count(*) > 1)
+              FROM inserted AS i INNER JOIN conference_days AS cd
+                  ON cd.[day] = i.[day]
+                     AND cd.[conference_id] = i.[conference_id]
+              WHERE cd.id <> i.id AND datediff(DAY, i.day, cd.day) < 1)
       THROW 50000, 'There is already a conference day in this date', 1
   END
 
 IF EXISTS(SELECT *
           FROM sys.objects
-          WHERE [name] = 'order_date_unchangable' AND TYPE = 'TR')
-  DROP TRIGGER [dbo].[order_date_unchangable]
+          WHERE [name] = 't_order_date_unchangable' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_order_date_unchangable]
 GO
 
-CREATE TRIGGER [dbo].[order_date_unchangable]
+CREATE TRIGGER [dbo].[t_order_date_unchangable]
   ON [dbo].[orders]
   AFTER UPDATE
 AS
@@ -1674,12 +1795,55 @@ GO
 
 IF EXISTS(SELECT *
           FROM sys.objects
-          WHERE [name] = 'order_items_parameters' AND TYPE = 'TR')
-  DROP TRIGGER [dbo].[order_items_parameters]
+          WHERE [name] = 't_day_reservations_parameters' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_day_reservations_parameters]
 GO
 
-CREATE TRIGGER [dbo].[order_items_parameters]
-  ON [dbo].[order_items]
+CREATE TRIGGER [dbo].[t_day_reservations_parameters]
+  ON [dbo].[day_reservations]
+  AFTER INSERT, UPDATE
+AS
+  BEGIN
+    IF EXISTS(SELECT *
+              FROM inserted AS i LEFT OUTER JOIN conference_days AS cd ON cd.id = i.conference_day_id
+              WHERE cd.day IS NULL)
+      THROW 50000, 'Conference day not in database', 1
+
+    IF (SELECT places_reserved
+        FROM inserted) < 0
+      THROW 50000, 'Places reserved are lower than 0', 1
+
+    IF EXISTS(SELECT *
+              FROM conference_days AS cd
+              WHERE seats < (SELECT sum(places_reserved)
+                             FROM day_reservations AS dr
+                             WHERE dr.conference_day_id = cd.id))
+      THROW 50000, 'Not enough seats on conference day to make an order', 1
+
+    --If we want to delete an day reservation we have to delete participants from this reservation as well.
+    --Those will delete workshop participants
+    IF EXISTS(SELECT *
+              FROM deleted) AND NOT Exists(SELECT *
+                                           FROM inserted)
+      BEGIN
+        DELETE FROM conference_day_particiants
+        WHERE day_reservation_id IN (SELECT id
+                                     FROM deleted)
+
+        DELETE FROM workshop_reservations
+        WHERE day_reservation_id IN (SELECT id
+                                     FROM deleted)
+      END
+  END
+
+IF EXISTS(SELECT *
+          FROM sys.objects
+          WHERE [name] = 't_workshop_reservations_parameters' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_workshop_reservations_parameters]
+GO
+
+CREATE TRIGGER [dbo].[t_workshop_reservations_parameters]
+  ON [dbo].[workshop_reservations]
   AFTER INSERT, UPDATE
 AS
   BEGIN
@@ -1688,58 +1852,61 @@ AS
               WHERE w.conference_day_id IS NULL)
       THROW 50000, 'Workshop not in database', 1
 
-    IF EXISTS(SELECT *
-              FROM inserted AS i LEFT OUTER JOIN conference_days AS cd ON cd.id = i.conference_days_id
-              WHERE cd.day IS NULL)
-      THROW 50000, 'Conference day not in database', 1
-
     IF (SELECT places_reserved
         FROM inserted) < 0
       THROW 50000, 'Places reserved are lower than 0', 1
 
-    IF (SELECT count(*)
-        FROM workshops AS w INNER JOIN conference_days AS cd ON cd.id = w.conference_day_id
-          INNER JOIN inserted AS i ON i.workshop_id = w.id AND cd.id = i.conference_days_id) <> (SELECT count(*)
-                                                                                                 FROM inserted)
-      THROW 50000, 'Workshop not in this conference day', 1
   END
 
 IF EXISTS(SELECT *
           FROM sys.objects
-          WHERE [name] = 'participants_connections' AND TYPE = 'TR')
-  DROP TRIGGER [dbo].[participants_connections]
+          WHERE [name] = 't_participants_connections' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_participants_connections]
 GO
 
-CREATE TRIGGER [dbo].[participants_connections]
+CREATE TRIGGER [dbo].[t_participants_connections]
   ON [dbo].[participants]
   AFTER INSERT, UPDATE, DELETE
 AS
   BEGIN
     IF EXISTS(SELECT *
-              FROM inserted AS p LEFT OUTER JOIN customers AS c ON c.id = p.id
-              WHERE c.is_company IS NULL)
-      THROW 50000, 'Customer id not found', 1
-    IF EXISTS(SELECT *
-              FROM inserted AS p LEFT OUTER JOIN order_items AS oi ON oi.id = p.id
-              WHERE oi.order_id IS NULL)
-      THROW 50000, 'Order item id not in database', 1
-    IF EXISTS(SELECT *
-              FROM inserted AS i INNER JOIN order_items AS oi ON oi.id = i.order_item_id
+              FROM inserted AS i
+                INNER JOIN conference_day_participants AS cdp ON i.id = cdp.participant_id
+                INNER JOIN day_reservations AS oi ON oi.id = cdp.day_reservation_id
                 INNER JOIN orders AS o ON o.id = oi.order_id
                 INNER JOIN customers AS c ON c.id = o.id
               WHERE c.id NOT IN (SELECT customer_id
                                  FROM inserted)
     )
       THROW 50000, 'Order item does not belong to this customer', 1
+
+    IF exists(SELECT *
+              FROM deleted) AND NOT exists(SELECT *
+                                           FROM inserted)
+      BEGIN
+        DELETE FROM conference_day_participants
+        WHERE participant_id IN (SELECT id
+                                 FROM deleted)
+      END
+
+    IF EXISTS(SELECT *
+              FROM inserted) AND exists(SELECT *
+                                        FROM deleted)
+      BEGIN
+        IF EXISTS(SELECT *
+                  FROM inserted AS i INNER JOIN deleted AS d ON d.id = i.id
+                  WHERE i.card_no IS NOT NULL AND d.card_no IS NULL)
+          THROW 50000, 'Cant make this participant a student', 1
+      END
   END
 
 IF EXISTS(SELECT *
           FROM sys.objects
-          WHERE [name] = 'workshop_participants_connections' AND TYPE = 'TR')
-  DROP TRIGGER [dbo].[workshop_participants_connections]
+          WHERE [name] = 't_workshop_participants_connections' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_workshop_participants_connections]
 GO
 
-CREATE TRIGGER [dbo].[workshop_participants_connections]
+CREATE TRIGGER [dbo].[t_workshop_participants_connections]
   ON [dbo].[workshop_participants]
   AFTER INSERT, UPDATE
 AS
@@ -1771,13 +1938,23 @@ GO
 
 CREATE TRIGGER [dbo].[t_customers_contact]
   ON [dbo].[customers]
-  AFTER INSERT, UPDATE
+  AFTER INSERT, UPDATE, DELETE
 AS
   BEGIN
     IF EXISTS(SELECT *
               FROM inserted
               WHERE (phone IS NULL) AND (email IS NULL))
       THROW 50000, 'No contact with customer', 1
+
+    --if we want to delete a customer also a participant has to be deleted
+    IF EXISTS(SELECT *
+              FROM deleted) AND NOT exists(SELECT *
+                                           FROM inserted)
+      BEGIN
+        DELETE FROM participants
+        WHERE customer_id IN (SELECT id
+                              FROM deleted)
+      END
   END
 
 IF EXISTS(SELECT *
@@ -1801,69 +1978,126 @@ AS
       THROW 50000, 'Discount has to be equal or greater than 0', 1
   END
 
--- IF EXISTS (SELECT * FROM sys.objects WHERE [name] = 't_payments_orders' AND TYPE = 'TR')
--- DROP TRIGGER [dbo].[t_payments_orders]
--- GO
---
--- CREATE TRIGGER [dbo].[t_payments_orders]
--- ON [dbo].[payments]
--- AFTER INSERT, UPDATE
--- AS BEGIN
---
--- END
---
--- IF EXISTS (SELECT * FROM sys.objects WHERE [name] = 't_conference_day_participants' AND TYPE = 'TR')
--- DROP TRIGGER [dbo].[t_conference_day_participants]
--- GO
---
--- CREATE TRIGGER [dbo].[t_conference_day_participants]
--- ON [dbo].[conference_day_participants]
--- AFTER INSERT, UPDATE, DELETE
--- AS BEGIN
---
--- END
+IF EXISTS(SELECT *
+          FROM sys.objects
+          WHERE [name] = 't_payments_orders' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_payments_orders]
+GO
 
--- IF EXISTS (SELECT * FROM sys.objects WHERE [name] = 't_customers_conference_day' AND TYPE = 'TR')
--- DROP TRIGGER [dbo].[t_customers_conference_day]
--- GO
+CREATE TRIGGER [dbo].[t_payments_orders]
+  ON [dbo].[payments]
+  AFTER INSERT, UPDATE, DELETE
+AS
+  BEGIN
+    IF exists(SELECT *
+              FROM deleted)
+      THROW 50000, 'Payment cant be deleted', 1
+    IF NOT exists(SELECT *
+                  FROM inserted AS i LEFT OUTER JOIN orders AS o ON o.id = i.order_id
+                  WHERE o.customer_id IS NULL)
+      THROW 50000, 'Order id not found in database', 1
+  END
 
+IF EXISTS(SELECT *
+          FROM sys.objects
+          WHERE [name] = 't_conference_day_participants' AND TYPE = 'TR')
+  DROP TRIGGER [dbo].[t_conference_day_participants]
+GO
 
--- DATA
+CREATE TRIGGER [dbo].[t_conference_day_participants]
+  ON [dbo].[conference_day_participants]
+  AFTER INSERT, UPDATE, DELETE
+AS
+  BEGIN
+    --if we delete conference_day participants we also want to delete workshop participants
+    --connected to this conference_day_participant_id
+    IF EXISTS(SELECT *
+              FROM deleted) AND NOT EXISTS(SELECT *
+                                           FROM inserted)
+      BEGIN
+        DELETE FROM workshop_participants
+        WHERE conference_day_participant_id IN (SELECT id
+                                                FROM deleted)
+      END
+  END
+GO
 
--- EXEC add_customer 'Jan Kowalski','506256651','1234567890','test@gmail.com','street 1','zipcode','Cebuland',0
--- EXEC add_customer 'Władysław Kowalski','502256652','1234567890','test2@gmail.com','street 2','zipcode','Cebuland',0
--- EXEC add_customer 'Jan Woźniak','506506506',null,null,'street 3','zipcode','Poland',1
---
--- EXEC add_order '506256651',null
--- EXEC add_order null,'test2@gmail.com'
---
--- EXEC create_conference 'Piekna konferencja','2018-02-01','2018-02-03',0
--- EXEC create_conference 'Równie piekna konferencja','2018-01-21','2018-01-22',0.25
---
--- --SELECT * FROM conferences
--- exec add_conference_day 2,'2018-02-03',5
--- exec add_conference_day 2,'2018-02-01',1
--- exec add_conference_day 1,'2018-01-21',10
---
--- -- exec create_workshop 5,'sucza good workshop',5,0,'2018-01-23 10:00:00.000','2018-01-23 15:00:00.000'
--- --
--- -- exec create_workshop 9,'Even better workshop',1,0,'2018-01-23 10:00:00.000','2018-01-23 15:00:00.000'
---
--- exec create_workshop 11,'uber workshop',5,0,'2018-01-21 11:00','2018-01-21 12:00'
---
--- SELECT * FROM conference_days
--- SELECT * FROM workshops
--- SELECT * FROM orders
--- SELECT * FROM customers
--- SELECT * FROM order_items
---
--- exec add_order_item 1,1,5,5
--- exec add_order_item 1,5,11,5
--- exec add_order_item 5,5,11,0
---
--- exec add_participant 1,7,'Gienek'
--- exec add_participant 2,7,'Gienek 2'
---
--- SELECT * FROM participants
---
--- SELECT * FROM order_items
+-- VIEWS
+IF EXISTS(SELECT *
+          FROM sys.objects
+          WHERE [name] = 'v_current_conferences' AND type = 'V')
+  DROP VIEW [dbo].[v_current_conferences]
+GO
+
+--selecting every conference that takes place today with free seats
+CREATE VIEW [dbo].[v_current_conferences]
+  AS
+    SELECT
+      *,
+      (SELECT dbo.get_free_day_places(cd.id)
+       FROM conference_days AS cd
+       WHERE cd.conference_id = c.id) AS 'Free places today'
+    FROM conferences AS c
+    WHERE c.end_time >= (SELECT GETDATE()) AND c.start_time <= (SELECT GETDATE())
+GO
+
+IF EXISTS(SELECT *
+          FROM sys.objects
+          WHERE [name] = 'v_current_workshops' AND type = 'V')
+  DROP VIEW [dbo].[v_current_workshops]
+GO
+
+CREATE VIEW [dbo].[v_current_workshops]
+  AS
+    SELECT
+      w.title,
+      w.places,
+      dbo.get_free_workshop_seats(w.id) AS 'free places',
+      c.[name]                          AS 'Conference name'
+    FROM workshops AS w
+      INNER JOIN workshop_reservations AS wp ON wp.workshop_id = w.id
+      INNER JOIN conference_days AS cd ON cd.id = w.conference_day_id
+      INNER JOIN conferences AS c ON c.id = cd.conference_id
+    WHERE day(w.start_time) = day((SELECT GETDATE()))
+GO
+
+IF EXISTS(SELECT *
+          FROM sys.objects
+          WHERE [name] = 'v_top_workshops_people' AND type = 'V')
+  DROP VIEW [dbo].[v_top_workshops_people]
+GO
+
+CREATE VIEW [dbo].[v_top_workshops_people]
+  AS
+    SELECT TOP 20
+      w.id,
+      w.title,
+      (SELECT count(*)
+       FROM workshop_participants AS wp
+       WHERE wp.workshop_id = w.id) AS 'Participants',
+      c.[name]
+    FROM workshops AS w
+      INNER JOIN conference_days AS cd ON cd.id = w.conference_day_id
+      INNER JOIN conferences AS c ON c.id = cd.conference_id
+    ORDER BY Participants DESC
+GO
+
+IF EXISTS(SELECT *
+          FROM sys.objects
+          WHERE [name] = 'v_top_conferences' AND type = 'V')
+  DROP VIEW [dbo].[v_top_conferences]
+GO
+
+CREATE VIEW [dbo].[v_top_conferences]
+  AS
+    SELECT TOP 20
+      c1.id,
+      c1.[name],
+      (SELECT count(*)
+       FROM conference_day_participants AS cdp
+        INNER JOIN conference_days AS cd ON cd.id = cdp.conference_day_id
+         INNER JOIN conferences AS c ON c.id = cd.conference_id
+       WHERE c.id = c1.id) AS 'Participants'
+    FROM conferences AS c1
+    ORDER BY Participants DESC
+GO
