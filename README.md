@@ -29,3 +29,12 @@ mssql -u sa -p $PASS
 ```
 
 or you can just use your IDE and as a server type "localhost" with port 1433. Username is "sa" (admin). 
+
+## Authors
+
+* **Tomasz Czajęcki** - [GitHub Profile](https://github.com/Tchayen)
+* **Marcin Aman** - [GitHub Profile](https://github.com/MarcinAman)
+
+## License
+
+Feel free to use this project in your appliactions, but we do not take any responsibity for the code.
